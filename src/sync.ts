@@ -10,7 +10,7 @@
 // ~/.config/adisthanam/sync.json (see docs/sync.md). Syncthing runs as you,
 // so so does this: no sudo. Linux and Windows.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
@@ -37,6 +37,15 @@ export type Plan = {
       devices: string[];
       /// Extra .stignore lines for this folder, after the shared [ignore].
       ignore?: string[];
+      /// Git repositories in this folder ("/name", "/dir/name"), left to Git:
+      /// never synced, so each computer keeps its own clone and its own
+      /// .git, and pulls and pushes through the remote. Repositories found
+      /// on this computer are left out too, so none is ever sent.
+      repos?: string[];
+      /// Top-level names that do not belong here (another device's files that
+      /// landed in this folder). Never synced; `quarantine FOLDER --strays`
+      /// moves them out once Syncthing ignores them, so no deletes are sent.
+      strays?: string[];
       paused?: boolean;
     }
   >;
@@ -118,6 +127,45 @@ export function sensitivePaths(syncthingHome: string): string[] {
 }
 
 export type Folder = { id: string; path: string; ignore: string[] };
+
+const SKIP = new Set([...OWN, ".git", "node_modules", ".dart_tool", "build", "target", "dist"]);
+
+/// Git repositories (a .git folder or file) under [root], as "/relative"
+/// paths, down to [depth] levels; it does not look inside a repository.
+export function findRepos(root: string, depth = 3): string[] {
+  const out: string[] = [];
+  const walk = (dir: string, rel: string, left: number) => {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    if (rel && names.includes(".git")) {
+      out.push(rel);
+      return;
+    }
+    if (left === 0) return;
+    for (const n of names) {
+      if (SKIP.has(n)) continue;
+      const p = join(dir, n);
+      try {
+        if (!statSync(p).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      walk(p, `${rel}/${n}`, left - 1);
+    }
+  };
+  walk(root, "", depth);
+  return out.sort();
+}
+
+/// The managed .stignore lines of a folder on this computer.
+function managedIgnore(plan: Plan, f: Plan["folders"][string], path: string): string[] {
+  const repos = f.repos ? [...new Set([...f.repos, ...findRepos(path)])].sort() : [];
+  return [...(plan.ignore ?? []), ...(f.ignore ?? []), ...repos, ...(f.strays ?? []).map((n) => `/${n}`)];
+}
 
 /// The rules every folder set must keep, whether from the plan or found in
 /// Syncthing. Returns what is wrong, in plain words; empty means fine.
@@ -330,7 +378,7 @@ export async function apply(plan: Plan, opts: Options = {}): Promise<string[]> {
   for (const [id, f] of Object.entries(plan.folders)) {
     if (!f.devices.includes(self)) continue;
     const path = expand(f.paths[self]);
-    const managed = [...(plan.ignore ?? []), ...(f.ignore ?? [])];
+    const managed = managedIgnore(plan, f, path);
     const ignoreFile = join(path, ".stignore");
     const before = existsSync(ignoreFile) ? readFileSync(ignoreFile, "utf8") : "";
     const after = ignoreText(before, managed);
@@ -395,6 +443,51 @@ export async function apply(plan: Plan, opts: Options = {}): Promise<string[]> {
   return changes;
 }
 
+/// Moves the plan's [strays] of [folderId] out of it, into the quarantine
+/// folder. Only once Syncthing has loaded them as ignored: an ignored entry
+/// that disappears is never announced as deleted, so this is safe even where
+/// two folders shared one path. The folder is paused while moving.
+export async function quarantineStrays(plan: Plan, folderId: string, opts: Options = {}): Promise<string[]> {
+  const stHome = opts.home ?? defaultSyncthingHome();
+  const api = connect(stHome);
+  const strays = plan.folders[folderId]?.strays ?? [];
+  if (!strays.length) throw new Error(`The plan lists no strays for folder ${folderId}`);
+  const folder = (await call(api, "GET", "/rest/config")).folders.find((f: any) => f.id === folderId);
+  if (!folder) throw new Error(`This computer has no Syncthing folder "${folderId}"`);
+  const path = expand(folder.path);
+  const loaded: string[] = (await call(api, "GET", `/rest/db/ignores?folder=${encodeURIComponent(folderId)}`))?.ignore ?? [];
+  const missing = strays.filter((n) => !loaded.includes(`/${n}`));
+  if (missing.length) throw new Error(`Syncthing does not ignore these yet: ${missing.join(", ")}. Run apply first; nothing was moved.`);
+  const here = strays.filter((n) => existsSync(join(path, n)));
+  if (opts.dry || !here.length) return here;
+  const wasPaused = folder.paused;
+  await call(api, "PATCH", `/rest/config/folders/${encodeURIComponent(folderId)}`, { paused: true });
+  try {
+    moveOut(path, here, folderId, opts);
+  } finally {
+    if (!wasPaused) await call(api, "PATCH", `/rest/config/folders/${encodeURIComponent(folderId)}`, { paused: false });
+  }
+  return here;
+}
+
+/// Moves [names] from [path] to the dated quarantine folder, listing each in its MANIFEST.txt.
+function moveOut(path: string, names: string[], folderId: string, opts: Options): void {
+  const day = new Date().toISOString().slice(0, 10);
+  const dir = join(opts.quarantineDir ?? join(home, `syncthing-quarantine-${day}`), folderId);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const name of names) {
+    if (existsSync(join(dir, name))) throw new Error(`${join(dir, name)} already exists; moved so far are listed in ${join(dir, "MANIFEST.txt")}`);
+    try {
+      renameSync(join(path, name), join(dir, name));
+    } catch (e) {
+      // Never copy-then-delete: a half-done copy could lose data.
+      if ((e as NodeJS.ErrnoException).code === "EXDEV") throw new Error(`${path} and ${dir} are on different drives; give --quarantine DIR on the same drive`);
+      throw e;
+    }
+    appendFileSync(join(dir, "MANIFEST.txt"), `${name}\n`);
+  }
+}
+
 /// Moves out of [folderId] the top-level entries that device [from] put
 /// there last, into a dated quarantine folder outside every synced folder.
 /// It reads Syncthing's records first (they cannot be read while the folder
@@ -409,6 +502,15 @@ export async function quarantine(plan: Plan, folderId: string, from: string, opt
   const folder = cfg.folders.find((f: any) => f.id === folderId);
   if (!folder) throw new Error(`This computer has no Syncthing folder "${folderId}"`);
   const path = expand(folder.path);
+  // Another folder on the same files would see the moves as deletes and
+  // send them on: move that folder to its own path first (`apply`).
+  for (const other of cfg.folders) {
+    if (other.id === folderId) continue;
+    const op = expand(other.path);
+    if (inside(op, path) || inside(path, op)) {
+      throw new Error(`Folder ${folderId} shares files with folder ${other.id} (${op}); moving them would delete them there too. Run apply first so each folder has its own path; nothing was changed.`);
+    }
+  }
   if (folder.paused) {
     throw new Error(`Folder ${folderId} is paused, so its records cannot be read. It must be running to sort it; nothing was changed.`);
   }
@@ -426,20 +528,7 @@ export async function quarantine(plan: Plan, folderId: string, from: string, opt
   if (opts.dry || !picked.length) return picked;
 
   await call(api, "PATCH", `/rest/config/folders/${encodeURIComponent(folderId)}`, { paused: true });
-  const day = new Date().toISOString().slice(0, 10);
-  const dir = join(opts.quarantineDir ?? join(home, `syncthing-quarantine-${day}`), folderId);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  for (const name of picked) {
-    if (existsSync(join(dir, name))) throw new Error(`${join(dir, name)} already exists; moved so far are listed in ${join(dir, "MANIFEST.txt")}`);
-    try {
-      renameSync(join(path, name), join(dir, name));
-    } catch (e) {
-      // Never copy-then-delete: a half-done copy could lose data.
-      if ((e as NodeJS.ErrnoException).code === "EXDEV") throw new Error(`${path} and ${dir} are on different drives; give --quarantine DIR on the same drive`);
-      throw e;
-    }
-    appendFileSync(join(dir, "MANIFEST.txt"), `${name}\n`);
-  }
+  moveOut(path, picked, folderId, opts);
   return picked;
 }
 
@@ -481,6 +570,20 @@ export async function status(plan: Plan | null, opts: Options = {}): Promise<{ l
         if (!plan.folders[f.id]?.devices.includes(self)) problems.push(`folder ${f.id} is not in the plan for ${self}`);
       }
       for (const d of await apply(plan, { ...opts, dry: true })) problems.push(`differs from the plan: ${d}`);
+      for (const [id, f] of Object.entries(plan.folders)) {
+        if (!f.repos || !f.devices.includes(self)) continue;
+        const path = expand(f.paths[self]);
+        for (const r of findRepos(path)) {
+          if (!f.repos.includes(r)) problems.push(`folder ${id}: Git repository ${r} is not in the plan's repos; add it so no computer syncs it`);
+          let remote = "";
+          try {
+            remote = execFileSync("git", ["-C", join(path, r), "remote"], { encoding: "utf8", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } }).trim();
+          } catch {
+            // no Git here, or not a repository after all
+          }
+          if (!remote) problems.push(`folder ${id}: Git repository ${r} has no remote, so Git cannot carry it to your other computers`);
+        }
+      }
     }
   }
   lines.push(problems.length ? "Problems:" : "No problems found.");
@@ -500,6 +603,7 @@ function loadPlan(file: string, required: boolean): Plan | null {
 
 const USAGE = `adisthanam sync status                          check this computer's Syncthing
 adisthanam sync apply [--dry-run]               bring it to the plan
+adisthanam sync quarantine FOLDER --strays [--dry-run]   move the plan's strays out
 adisthanam sync quarantine FOLDER --from DEVICE [--dry-run]
                                                 move what DEVICE wrongly put in FOLDER out of it
 Options: --home DIR (Syncthing's configuration folder), --plan FILE,
@@ -522,7 +626,7 @@ if (import.meta.main) {
     const from = flag("--from");
     const quarantineDir = flag("--quarantine");
     const dry = args.includes("--dry-run");
-    const [cmd, folderId] = args.filter((a) => a !== "--dry-run");
+    const [cmd, folderId] = args.filter((a) => a !== "--dry-run" && a !== "--strays");
     const opts: Options = { dry, home: homeDir, quarantineDir };
     if (cmd === "apply") {
       const changes = await apply(loadPlan(file, true)!, opts);
@@ -531,6 +635,9 @@ if (import.meta.main) {
       const r = await status(loadPlan(file, false), opts);
       console.log(r.lines.join("\n"));
       process.exitCode = r.ok ? 0 : 1;
+    } else if (cmd === "quarantine" && folderId && args.includes("--strays")) {
+      const moved = await quarantineStrays(loadPlan(file, true)!, folderId, opts);
+      console.log(moved.length ? `${dry ? "Would move" : "Moved"} ${moved.length} strays out of ${folderId}:\n  ${moved.join("\n  ")}` : `No strays left in ${folderId}.`);
     } else if (cmd === "quarantine" && folderId && from) {
       const moved = await quarantine(loadPlan(file, true)!, folderId, from, opts);
       if (!moved.length) console.log(`Nothing in ${folderId} was last changed by ${from}; nothing moved.`);

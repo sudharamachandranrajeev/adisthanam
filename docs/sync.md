@@ -76,12 +76,36 @@ devices. The shape, with example values:
   QUIC on port 22000, unless it has its own `"listen"`.
 - `folders`: every computer in `devices` shares the folder with all the others (a full mesh).
   `paths` gives each computer's path; a computer not in `devices` does not have the folder.
-- `paused`: added or kept paused, for a folder that must not move data yet.
+- `paused`: added or kept paused, for a folder that must not move data yet. Keep it in the
+  plan, not in Syncthing's GUI: `apply` puts it back, and resuming a folder in the GUI before
+  every computer has it at the right path pulls the wrong files in.
+- `repos`: Git repositories inside the folder. Syncthing never carries them: a working tree
+  synced without its `.git`, or a `.git` synced while Git writes to it, can corrupt a
+  repository. Push and pull them with Git instead. `apply` also ignores any repository it
+  finds (three levels deep), and `status` names the ones missing from `repos` and the ones
+  with no remote.
+- `strays`: top-level entries that do not belong in the folder. They are ignored, never
+  synced, and `quarantine FOLDER --strays` moves them out (see below).
 
 ## Moving out what a device wrongly put in a folder
 
 When a folder was accepted at the wrong path, the files of one device end up in another
-device's folder. `quarantine` moves them out without deleting anything:
+device's folder. The safe way out is to list them as `strays`, then:
+
+```sh
+adisthanam sync apply                                 # Syncthing now ignores them
+adisthanam sync quarantine notes --strays --dry-run   # read the list first
+adisthanam sync quarantine notes --strays
+```
+
+It moves them only once Syncthing has loaded them as ignored. An ignored entry that
+disappears is never announced as deleted, so no other computer loses anything, even where
+two folders shared one path. They go to `~/syncthing-quarantine-<date>/<folder>/` with a
+`MANIFEST.txt`.
+
+`quarantine --from DEVICE` instead picks what one device changed last. Removing those entries
+**is** announced as deletes once the folder runs again, so use it only where no other folder
+shares the path (it refuses when the paths overlap):
 
 ```sh
 adisthanam sync quarantine notes --from laptop --dry-run   # read the list first

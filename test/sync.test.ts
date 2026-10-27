@@ -9,7 +9,7 @@ import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { apply, checkPlan, folderProblems, ignoreText, quarantine, status, validDeviceId, type Plan } from "../src/sync.ts";
+import { apply, checkPlan, findRepos, folderProblems, ignoreText, quarantine, quarantineStrays, status, validDeviceId, type Plan } from "../src/sync.ts";
 
 // Anything that forgets its own Syncthing home fails here instead of
 // reaching the real one on this computer.
@@ -266,6 +266,58 @@ test("one plan on two computers: they sync, and quarantine moves only what the o
   await new Promise((r) => setTimeout(r, 3000));
   assert.ok(existsSync(join(db, "from-b.txt")) && existsSync(join(db, "b-dir/x.txt")));
   await assert.rejects(quarantine(plan, "shared", "b", { home: a.home, quarantineDir: q }), /paused/);
+
+  // A second folder on the same path: moving would delete through it, so quarantine refuses.
+  const key = { "X-API-Key": a.key, "content-type": "application/json" };
+  const defaults = await rest(a, "/rest/config/defaults/folder");
+  await fetch(`http://127.0.0.1:${a.gui}/rest/config/folders/twin`, { method: "PUT", headers: key, body: JSON.stringify({ ...defaults, id: "twin", path: da }) });
+  await assert.rejects(quarantine(plan, "shared", "b", { home: a.home, quarantineDir: q }), /shares files with folder twin/);
+  await fetch(`http://127.0.0.1:${a.gui}/rest/config/folders/twin`, { method: "DELETE", headers: key });
+});
+
+test("Git repositories are left to Git: listed or found, never synced", { skip }, async () => {
+  const w = join(base, "work-repos");
+  mkdirSync(join(w, "app", ".git"), { recursive: true });
+  mkdirSync(join(w, "spikes", "feat-x"), { recursive: true });
+  writeFileSync(join(w, "spikes", "feat-x", ".git"), "gitdir: elsewhere\n");
+  mkdirSync(join(w, "app", "sub", ".git"), { recursive: true });
+  mkdirSync(join(w, "notes"), { recursive: true });
+  assert.deepEqual(findRepos(w), ["/app", "/spikes/feat-x"], "worktrees count; nothing inside a repository is searched");
+
+  const plan = planFor({ w: { label: "W", paths: { a: w }, devices: ["a"], repos: ["/only-elsewhere"] } });
+  await apply(plan, opt(a));
+  const ignore = readFileSync(join(w, ".stignore"), "utf8");
+  for (const r of ["/app", "/spikes/feat-x", "/only-elsewhere"]) assert.ok(ignore.split("\n").includes(r), r);
+  assert.ok(!ignore.includes("/notes"));
+  const s = (await status(plan, { home: a.home })).lines.join("\n");
+  assert.match(s, /Git repository \/app is not in the plan's repos/);
+  assert.match(s, /Git repository \/app has no remote/);
+  plan.folders.w.repos = ["/app", "/only-elsewhere", "/spikes/feat-x"];
+  assert.deepEqual(await apply(plan, opt(a)), [], "same lines, nothing to change");
+  assert.doesNotMatch((await status(plan, { home: a.home })).lines.join("\n"), /not in the plan's repos/);
+});
+
+test("strays are ignored first, then moved out without a delete reaching the other side", { skip }, async () => {
+  const da = join(base, "st-a"), db = join(base, "st-b");
+  const plan = planFor({ s: { label: "S", paths: { a: da, b: db }, devices: ["a", "b"] } });
+  await apply(plan, opt(a));
+  await apply(plan, opt(b));
+  writeFileSync(join(db, "Not Mine"), "b's stray");
+  mkdirSync(join(db, "keep"));
+  writeFileSync(join(db, "keep", "k.txt"), "k");
+  await until("b's files on a", () => existsSync(join(da, "Not Mine")) && existsSync(join(da, "keep/k.txt")));
+
+  plan.folders.s.strays = ["Not Mine"];
+  const q = join(base, "q-strays");
+  await assert.rejects(quarantineStrays(plan, "s", { home: a.home, quarantineDir: q }), /does not ignore these yet/);
+  await apply(plan, opt(a));
+  await until("a to load the ignore", async () => (await rest(a, "/rest/db/ignores?folder=s")).ignore?.includes("/Not Mine"));
+  assert.deepEqual(await quarantineStrays(plan, "s", { home: a.home, quarantineDir: q }), ["Not Mine"]);
+  assert.equal(readFileSync(join(q, "s", "Not Mine"), "utf8"), "b's stray");
+  assert.equal((await rest(a, "/rest/config/folders/s")).paused, false, "unpaused again");
+  await new Promise((r) => setTimeout(r, 5000));
+  assert.ok(existsSync(join(db, "Not Mine")), "b's copy is untouched: no delete was sent");
+  assert.ok(existsSync(join(da, "keep/k.txt")), "the rest keeps syncing");
 });
 
 test("apply refuses a bad plan, and a computer missing from it, before touching Syncthing", { skip }, async () => {
