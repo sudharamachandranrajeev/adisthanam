@@ -259,14 +259,23 @@ firewall() {
   if ! $dry && { ! command -v ufw >/dev/null || ! ufw status | grep -q '^Status: active'; }; then
     die "No active ufw firewall. Enable one (sudo ufw enable) and run install again."
   fi
-  local p
+  local p managed
   p="$(port)"
-  # Rules the old server or its installer may have added.
-  for src in "in on tailscale0" "from 10.0.0.0/8" "from 172.16.0.0/12" "from 192.168.0.0/16"; do
-    # shellcheck disable=SC2086
-    $dry || ufw --force delete allow $src to any port "$p" proto tcp >/dev/null 2>&1 || true
-  done
+  managed="$p 443"
+  systemctl is-active --quiet sshd && managed+=" 22"
   run ufw default deny incoming
+  # Ports Adisthanam manages are Tailscale-only: any other allow rule for
+  # them (from the old server, or added by hand for the home network) goes.
+  # Rules for other ports belong to other programs; they are only reported.
+  if ! $dry; then
+    local action arg
+    while read -r action arg; do
+      case "$action" in
+        delete) run ufw --force delete "$arg" ;;
+        warn) hint "Also open beyond Tailscale (another program's rule, left as is): ${arg%%|*} from ${arg#*|}" ;;
+      esac
+    done < <(ufw status numbered | awk -v ports="$managed" -f "$opt/current/bin/ufw-stale-rules")
+  fi
   run ufw allow in on tailscale0 to any port 443 proto tcp comment 'Adisthanam HTTPS (Tailscale only)'
   if systemctl is-active --quiet sshd; then
     run ufw allow in on tailscale0 to any port 22 proto tcp comment 'SSH (Tailscale only)'

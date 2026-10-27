@@ -1,0 +1,42 @@
+#!/usr/bin/env -S awk -f
+# Reads `ufw status numbered` and finds incoming allow rules that reach
+# beyond Tailscale. Used by `adisthanam install` (firewall step).
+#
+#   ufw status numbered | bin/ufw-stale-rules -v ports="8090 443 22"
+#
+# Prints, for each such rule:
+#   delete N        a rule for a port Adisthanam manages (ports=...): these
+#                   must be Tailscale-only, so the installer removes them
+#   warn TO|FROM    any other port: another program's rule, only reported
+# Rules on tailscale0 are left alone. Deletions are printed highest number
+# first, because ufw renumbers the rules after each one.
+BEGIN {
+  n = split(ports, list, " ")
+  for (i = 1; i <= n; i++) managed[list[i]] = 1
+}
+/^\[ *[0-9]+\]/ {
+  num = $0
+  sub(/^\[ */, "", num)
+  sub(/\].*/, "", num)
+  line = $0
+  sub(/^\[ *[0-9]+\] */, "", line)
+  if (!match(line, / (ALLOW|DENY|REJECT|LIMIT)( IN| OUT)? /)) next
+  to = substr(line, 1, RSTART - 1)
+  action = substr(line, RSTART + 1, RLENGTH - 2)
+  from = substr(line, RSTART + RLENGTH)
+  sub(/ +#.*/, "", from)
+  sub(/ +$/, "", from)
+  sub(/^ +/, "", from)
+  sub(/ +$/, "", to)
+  if (action !~ /^ALLOW( IN)?$/ || to ~ / on tailscale0/) next
+  port = ""
+  k = split(to, t, " ")
+  for (j = 1; j <= k; j++) if (t[j] ~ /^[0-9]+(\/(tcp|udp))?$/) port = t[j]
+  sub(/\/.*/, "", port)
+  if (port != "" && port in managed) dels[++nd] = num
+  else warns[++nw] = to "|" from
+}
+END {
+  for (i = nd; i >= 1; i--) print "delete " dels[i]
+  for (i = 1; i <= nw; i++) print "warn " warns[i]
+}
