@@ -1,0 +1,15 @@
+# The pinned Brahma server, extracted by scripts/fetch-brahma.sh.
+/vendor/
+node_modules/
+
+# Anything a running server writes. None of it belongs in a public repo.
+*.db
+*.db-wal
+*.db-shm
+*.env
+*.cred
+adisthanam.conf
+last-backup
+outbox/
+backups/
+*.log

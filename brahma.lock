@@ -1,0 +1,7 @@
+# The Brahma sync server release Adisthanam runs. scripts/fetch-brahma.sh
+# extracts exactly these paths from exactly this commit; nothing else from
+# the Brahma repository is installed. To upgrade, change the commit, run
+# `npm test`, and read the server's changelog for protocol changes first.
+BRAHMA_REPO=https://github.com/sudharamachandranrajeev/brahma.git
+BRAHMA_COMMIT=281865b92d6cbef80d3babaa4150ab5a439a3996
+BRAHMA_PATHS="server/src/app.ts server/src/sqlite.ts server/src/rules.ts server/src/threats.ts server/schema.sql"

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Before anything leaves this computer, scan every commit, not just the last.
+exec scripts/check-public.sh --history

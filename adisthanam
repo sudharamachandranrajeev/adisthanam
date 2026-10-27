@@ -1,0 +1,454 @@
+#!/usr/bin/env bash
+# Adisthanam: installs, looks after and removes the Brahma sync server.
+# Run as root (sudo); every command that changes the system is printed first.
+#
+#   adisthanam install --target home [--node-name NAME] [--import-legacy DIR] [--yes] [--dry-run]
+#   adisthanam status              running?, version, accounts, last backup
+#   adisthanam link                the setup link and QR code (until the owner exists)
+#   adisthanam backup              back up now (a daily backup runs by itself)
+#   adisthanam verify FILE         check a backup without changing it
+#   adisthanam restore FILE        put a backup back (the current data is saved first)
+#   adisthanam rollback            go back to the previous release
+#   adisthanam uninstall           stop and remove (asks before deleting data)
+set -euo pipefail
+
+here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+opt=/opt/adisthanam
+state=/var/lib/adisthanam
+store=/var/backups/adisthanam
+etc=/etc/adisthanam
+conf=$etc/adisthanam.conf
+creds=/etc/credstore.encrypted
+units=/etc/systemd/system
+node=/usr/bin/node
+service=adisthanam
+min_tailscale=1.102.3
+
+dry=false
+yes=false
+target=""
+node_name=""
+legacy=""
+
+bold=$'\e[1m' green=$'\e[32m' yellow=$'\e[33m' red=$'\e[31m' off=$'\e[0m'
+[[ -t 1 ]] || { bold="" green="" yellow="" red="" off=""; }
+say() { printf '%s\n' "$*"; }
+step() { printf '\n%s==> %s%s\n' "$bold" "$*" "$off"; }
+ok() { printf '  %s✓%s %s\n' "$green" "$off" "$*"; }
+hint() { printf '  %s→%s %s\n' "$yellow" "$off" "$*"; }
+die() { printf '%sProblem:%s %s\n' "$red" "$off" "$*" >&2; exit 1; }
+# Prints a command, then runs it (only prints it with --dry-run).
+run() {
+  printf '  %s+%s %s\n' "$yellow" "$off" "$*"
+  $dry || "$@"
+}
+ask() {
+  $yes && return 0
+  [[ -t 0 ]] || return 1
+  local reply
+  read -r -p "  $1 [y/N] " reply
+  [[ $reply =~ ^[Yy] ]]
+}
+need_root() { $dry || [[ $(id -u) -eq 0 ]] || die "Run this with sudo: sudo $0 $*"; }
+port() { sed -n 's/^PORT=//p' "$conf" 2>/dev/null || true; }
+healthy() {
+  local p
+  p="$(port)"
+  p="${p:-8090}"
+  curl -fsS -m 2 -H "Host: 127.0.0.1:$p" "http://127.0.0.1:$p/api/health"
+}
+wait_healthy() {
+  for _ in $(seq 1 40); do
+    healthy >/dev/null 2>&1 && return 0
+    sleep 0.25
+  done
+  return 1
+}
+as_server() { runuser -u adisthanam -- env STATE_DIRECTORY="$state" "$node" "$@"; }
+version_ge() { [[ $(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1) == "$2" ]]; }
+
+preflight() {
+  step "Checking this computer"
+  command -v systemctl >/dev/null || die "Adisthanam's home target needs systemd."
+  [[ -x $node ]] || die "No Node.js at $node. Install the LTS release (Arch: sudo pacman -S nodejs-lts-krypton). A Node.js in your home folder cannot be used: the server must not run code you can change without sudo."
+  local major
+  major="$("$node" -p 'process.versions.node.split(".")[0]')"
+  ((major >= 24)) || die "Node.js 24 or newer is needed at $node (found $("$node" --version))."
+  ok "Node.js $("$node" --version) at $node"
+  command -v systemd-creds >/dev/null || die "systemd-creds is missing (systemd 250 or newer is needed)."
+  command -v git >/dev/null || die "git is needed."
+  command -v curl >/dev/null || die "curl is needed."
+  command -v tailscale >/dev/null || die "Tailscale is needed: https://tailscale.com/download"
+  local tv
+  tv="$(tailscale version | head -n1)"
+  version_ge "$tv" "$min_tailscale" || die "Tailscale $tv has known security bugs; update to $min_tailscale or newer."
+  tailscale status >/dev/null 2>&1 || die "Tailscale is not signed in. Run: sudo tailscale up"
+  ok "Tailscale $tv, signed in"
+  if [[ -e /dev/tpmrm0 ]] && systemd-analyze has-tpm2 >/dev/null 2>&1; then
+    cred_key=host+tpm2
+    ok "TPM2 found: secrets are sealed to this computer's TPM"
+  else
+    cred_key=host
+    hint "No usable TPM2: secrets are sealed to this computer's host key only"
+  fi
+}
+
+# --- Release ---------------------------------------------------------------
+
+stage_release() {
+  step "Building the release from git"
+  [[ -d $here/.git ]] || die "Run install from a git checkout of Adisthanam."
+  if [[ -n $(git -C "$here" status --porcelain) && ${ADISTHANAM_DEV:-} != 1 ]]; then
+    die "The checkout has uncommitted changes. Commit them first, so what is installed is exactly a commit."
+  fi
+  local commit ver
+  commit="$(git -C "$here" rev-parse --short=12 HEAD)"
+  ver="$(sed -n 's/^export const VERSION = "\(.*\)";/\1/p' "$here/src/serve.ts")"
+  [[ -n $ver ]] || die "Cannot read VERSION from src/serve.ts"
+  release="$ver-$commit"
+  local dest=$opt/releases/$release
+  if [[ -d $dest ]]; then
+    ok "Release $release already installed"
+    return
+  fi
+  local tmp
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" RETURN
+  run bash -c "git -C '$here' archive --format=tar HEAD | tar -x -C '$tmp'"
+  run "$tmp/scripts/fetch-brahma.sh" "$tmp/vendor"
+  run chmod -R u=rwX,go=rX "$tmp"
+  # Every module the server imports must load from the archive alone.
+  run runuser -u nobody -- "$node" --input-type=module -e \
+    "await import('$tmp/vendor/brahma/server/src/app.ts'); await import('$tmp/vendor/brahma/server/src/sqlite.ts')"
+  run install -d -m 0755 -o root -g root "$opt" "$opt/releases"
+  run cp -a "$tmp" "$dest"
+  run chown -R root:root "$dest"
+  run chmod -R u=rwX,go=rX "$dest"
+  ok "Release $release in $dest"
+}
+
+activate_release() {
+  run ln -sfn "releases/$release" "$opt/current.new"
+  run mv -T "$opt/current.new" "$opt/current"
+  run ln -sfn "$opt/current/adisthanam" /usr/local/bin/adisthanam
+}
+
+# --- Identity, settings and secrets -----------------------------------------
+
+ensure_user() {
+  step "Server user"
+  if id adisthanam >/dev/null 2>&1; then
+    ok "User adisthanam exists"
+  else
+    run useradd --system --user-group --home-dir "$state" --no-create-home --shell /usr/bin/nologin adisthanam
+  fi
+  run install -d -m 0700 -o adisthanam -g adisthanam "$state"
+  run install -d -m 0700 -o root -g root "$store"
+}
+
+tailnet_name() { tailscale status --json | "$node" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log((JSON.parse(s).Self?.DNSName??"").replace(/\.$/,"")))'; }
+
+ensure_conf() {
+  step "Settings"
+  if [[ -n $node_name ]]; then
+    [[ $node_name =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || die "--node-name: lower-case letters, digits and dashes only"
+    run tailscale set --hostname="$node_name"
+    $dry || sleep 2
+  fi
+  local host
+  host="$(tailnet_name)"
+  [[ -n $host ]] || die "Could not read this computer's Tailscale name."
+  hint "Tailscale name: $host (it appears in public certificate logs once HTTPS is used; choose a neutral name with --node-name)"
+  if [[ -f $conf ]]; then
+    run sed -i "s/^HOSTS=.*/HOSTS=$host/" "$conf"
+  else
+    run install -d -m 0755 "$etc"
+    $dry || printf '%s\n' \
+      "# Adisthanam settings (no secrets here; those are in $creds)." \
+      "PORT=8090" "BIND=127.0.0.1" "HOSTS=$host" "NAME=Home server" >"$conf"
+    $dry || chmod 0644 "$conf"
+    ok "Wrote $conf"
+  fi
+}
+
+random_secret() { head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '='; }
+legacy_value() { [[ -n $legacy && -f $legacy/server.env ]] && sed -n "s/^$1=//p" "$legacy/server.env" || true; }
+# A setup code in the format the Brahma server makes its own codes.
+setup_code() { "$node" --input-type=module -e "const m = await import('$opt/current/vendor/brahma/server/src/app.ts'); console.log(m.newCode())"; }
+
+ensure_secret() {
+  local name=$1 value=$2 file=$creds/adisthanam.$1
+  if [[ -f $file ]]; then
+    ok "Secret $name already sealed"
+    return
+  fi
+  run install -d -m 0700 "$creds"
+  printf '  %s+%s systemd-creds encrypt --with-key=%s --name=%s - %s\n' "$yellow" "$off" "$cred_key" "$name" "$file"
+  $dry || printf '%s' "$value" | systemd-creds encrypt --with-key="$cred_key" --name="$name" - "$file"
+  $dry || chmod 0600 "$file"
+}
+
+ensure_secrets() {
+  step "Secrets"
+  local key code
+  key="$(legacy_value TOKEN_KEY)"
+  code="$(legacy_value SETUP_CODE)"
+  [[ -n $key ]] && hint "Keeping the signing key from $legacy, so signed-in devices stay signed in"
+  ensure_secret token_key "${key:-$(random_secret)}"
+  ensure_secret setup_code "${code:-$(setup_code)}"
+}
+
+# --- Data -----------------------------------------------------------------
+
+import_legacy() {
+  [[ -n $legacy ]] || return 0
+  step "Moving the data from $legacy"
+  if [[ -f $state/brahma.db ]]; then
+    ok "Data already in $state; not importing again"
+    return
+  fi
+  [[ -f $legacy/brahma.db ]] || die "No brahma.db in $legacy"
+  local owner uid
+  owner="${SUDO_USER:-}"
+  if [[ -n $owner ]]; then
+    uid="$(id -u "$owner")"
+    run runuser -u "$owner" -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user disable --now brahma-server.service brahma-server-backup.timer || true
+  fi
+  if ! $dry && (exec 3<>/dev/tcp/127.0.0.1/8090) 2>/dev/null; then
+    die "Something still listens on port 8090. Stop the old server first."
+  fi
+  local tmp
+  tmp="$(mktemp -d)"
+  run "$node" "$opt/current/src/db.ts" copy "$legacy/brahma.db" "$tmp/brahma.db"
+  run "$node" "$opt/current/src/db.ts" verify "$tmp/brahma.db"
+  run install -m 0600 -o adisthanam -g adisthanam "$tmp/brahma.db" "$state/brahma.db"
+  run rm -rf "$tmp"
+  ok "Data moved. The old copy stays in $legacy until you delete it."
+}
+
+# --- Services ---------------------------------------------------------------
+
+install_units() {
+  step "Services"
+  for u in adisthanam.service adisthanam-backup.service adisthanam-backup.timer; do
+    run install -m 0644 -o root -g root "$opt/current/install/units/$u" "$units/$u"
+  done
+  run systemctl daemon-reload
+  run systemctl enable --now adisthanam.service adisthanam-backup.timer
+  run systemctl restart adisthanam.service
+  $dry && return
+  wait_healthy || die "The server did not start. See: journalctl -u $service -n 50"
+  ok "Running on 127.0.0.1:$(port)"
+}
+
+publish() {
+  step "HTTPS through Tailscale"
+  run tailscale serve --bg --https=443 "http://127.0.0.1:$(port || echo 8090)"
+  ok "Published at https://$(tailnet_name)"
+}
+
+firewall() {
+  step "Firewall"
+  if ! command -v ufw >/dev/null || ! ufw status | grep -q '^Status: active'; then
+    die "No active ufw firewall. Enable one (sudo ufw enable) and run install again."
+  fi
+  local p
+  p="$(port || echo 8090)"
+  # Rules the old server or its installer may have added.
+  for src in "in on tailscale0" "from 10.0.0.0/8" "from 172.16.0.0/12" "from 192.168.0.0/16"; do
+    # shellcheck disable=SC2086
+    $dry || ufw --force delete allow $src to any port "$p" proto tcp >/dev/null 2>&1 || true
+  done
+  run ufw default deny incoming
+  run ufw allow in on tailscale0 to any port 443 proto tcp comment 'Adisthanam HTTPS (Tailscale only)'
+  if systemctl is-active --quiet sshd; then
+    run ufw allow in on tailscale0 to any port 22 proto tcp comment 'SSH (Tailscale only)'
+  fi
+  ok "Incoming: Tailscale port 443 (and 22 for SSH) only"
+}
+
+harden_ssh() {
+  systemctl is-active --quiet sshd || return 0
+  step "SSH: keys only"
+  local owner="${SUDO_USER:-}" keys
+  keys="$(getent passwd "$owner" | cut -d: -f6)/.ssh/authorized_keys"
+  if [[ -z $owner || ! -s $keys ]]; then
+    hint "No authorized_keys for ${owner:-the admin user}; leaving SSH settings unchanged so you are not locked out."
+    return
+  fi
+  local file=/etc/ssh/sshd_config.d/10-adisthanam.conf
+  $dry || printf '%s\n' "# Adisthanam: keys only, no root login." \
+    "PasswordAuthentication no" "KbdInteractiveAuthentication no" "PermitRootLogin no" \
+    "AuthenticationMethods publickey" >"$file"
+  printf '  %s+%s write %s\n' "$yellow" "$off" "$file"
+  run sshd -t
+  run systemctl reload sshd
+  ok "SSH accepts keys only (from Tailscale only, by the firewall)"
+}
+
+stay_awake() {
+  step "Staying on"
+  local file=/etc/systemd/logind.conf.d/10-adisthanam.conf
+  run install -d -m 0755 /etc/systemd/logind.conf.d
+  $dry || printf '%s\n' "# Adisthanam: a server keeps running with the lid closed." "[Login]" \
+    "HandleLidSwitch=ignore" "HandleLidSwitchExternalPower=ignore" "HandleLidSwitchDocked=ignore" \
+    "HandleSuspendKey=ignore" "HandleHibernateKey=ignore" "IdleAction=ignore" >"$file"
+  printf '  %s+%s write %s\n' "$yellow" "$off" "$file"
+  run systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+  hint "The lid setting takes effect after the next restart (restarting logind now would end your desktop session)."
+}
+
+show_link() {
+  local users host code
+  host="$(tailnet_name)"
+  users="$(as_server "$opt/current/src/db.ts" users)"
+  say "  Address: https://$host"
+  if [[ $users != 0 ]]; then
+    say "  The owner account exists. Invite people from the app: Settings, Sync, Invite someone."
+    return
+  fi
+  [[ -t 1 ]] || die "The setup link holds the one-time owner code; it is only printed to a terminal."
+  code="$(systemd-creds decrypt "$creds/adisthanam.setup_code" -)"
+  local link="brahma://setup?s=https%3A%2F%2F$host&i=$code"
+  say ""
+  say "  ${bold}Setup link${off} (paste it in any Brahma app, or scan the code):"
+  say "  $link"
+  command -v qrencode >/dev/null && qrencode -t ANSIUTF8 -m 2 "$link"
+  say "  In the app: Sync across my devices → I have a server → paste the link → create your account."
+  say "  Don't share it; it stops working once your account exists."
+}
+
+checklist() {
+  step "Still to do by hand"
+  hint "Tailscale admin console: replace allow-all with grants (family → tag:adisthanam tcp:443, owner → tcp:22), tag this computer, turn on device approval."
+  hint "Keep exit node, subnet routes, the web interface and Funnel off on this computer."
+  hint "Hardware keys or passkeys on GitHub, your e-mail and the Tailscale login; remove SMS recovery; keep recovery codes offline."
+  hint "Off-site copy: plug in a USB disk for encrypted backups (next step of this phase)."
+}
+
+# --- Commands ---------------------------------------------------------------
+
+cmd_install() {
+  [[ $target == home ]] || die "Only --target home is available in this release."
+  need_root install
+  preflight
+  stage_release
+  activate_release
+  ensure_user
+  ensure_conf
+  ensure_secrets
+  import_legacy
+  install_units
+  publish
+  firewall
+  harden_ssh
+  stay_awake
+  $dry || { step "Connect your apps"; show_link; }
+  checklist
+}
+
+cmd_status() {
+  need_root status
+  if systemctl is-active --quiet "$service"; then ok "Running ($(systemctl show -p NRestarts --value "$service") restarts)"; else say "${red}Not running${off} (journalctl -u $service -n 50)"; fi
+  say "  Release: $(readlink "$opt/current" | sed 's|releases/||')"
+  healthy >/dev/null 2>&1 && ok "Answers on 127.0.0.1:$(port)" || say "  ${red}No answer on 127.0.0.1:$(port)${off}"
+  as_server "$opt/current/src/db.ts" status | sed 's/^/  /'
+  local last
+  last="$(find "$store" -maxdepth 1 -name 'brahma-*.db' -printf '%f\n' 2>/dev/null | sort -r | head -n1)"
+  say "  Last backup: ${last:-never}"
+  systemctl list-timers adisthanam-backup.timer --no-pager 2>/dev/null | sed -n 2p | awk '{print "  Next backup: "$1" "$2" "$3}'
+}
+
+cmd_backup() {
+  need_root backup
+  run systemctl start adisthanam-backup.service
+  journalctl -u adisthanam-backup.service -n 4 --no-pager -o cat | sed 's/^/  /'
+}
+
+cmd_verify() {
+  [[ -n ${1:-} ]] || die "Name the backup file to verify."
+  "$node" "$here/src/db.ts" verify "$1"
+}
+
+cmd_restore() {
+  need_root restore
+  local file="${1:-}"
+  [[ -f $file ]] || die "No such file: $file"
+  "$node" "$opt/current/src/db.ts" verify "$file" || die "That backup fails its check; nothing was changed."
+  ask "Replace the server's data with $file? (the current data is kept in $store)" || exit 1
+  local stamp
+  stamp="$(date -u +%Y-%m-%dT%H-%M-%S)"
+  run systemctl stop "$service"
+  # Start again whatever happens, so a bad step never leaves sync down.
+  trap 'systemctl start adisthanam' EXIT
+  if [[ -f $state/brahma.db ]]; then
+    run "$node" "$opt/current/src/db.ts" copy "$state/brahma.db" "$store/before-restore-$stamp.db"
+  fi
+  run rm -f "$state/brahma.db-wal" "$state/brahma.db-shm"
+  run install -m 0600 -o adisthanam -g adisthanam "$file" "$state/brahma.db"
+  trap - EXIT
+  run systemctl start "$service"
+  wait_healthy && ok "Restored and running. The previous data is in $store/before-restore-$stamp.db" ||
+    die "Restored, but it did not start: journalctl -u $service -n 50"
+}
+
+cmd_rollback() {
+  need_root rollback
+  local cur prev
+  cur="$(readlink "$opt/current")"
+  prev="$(find "$opt/releases" -mindepth 1 -maxdepth 1 -type d -printf 'releases/%f\n' | sort -V | grep -vxF "$cur" | tail -n1)"
+  [[ -n $prev ]] || die "No earlier release to go back to."
+  run ln -sfn "$prev" "$opt/current.new"
+  run mv -T "$opt/current.new" "$opt/current"
+  run systemctl restart "$service"
+  if wait_healthy; then
+    ok "Back on ${prev#releases/}"
+  else
+    run ln -sfn "$cur" "$opt/current.new"
+    run mv -T "$opt/current.new" "$opt/current"
+    run systemctl restart "$service"
+    die "${prev#releases/} did not start; stayed on ${cur#releases/}."
+  fi
+}
+
+cmd_uninstall() {
+  need_root uninstall
+  ask "Stop and remove Adisthanam from this computer?" || exit 1
+  run systemctl disable --now adisthanam.service adisthanam-backup.timer || true
+  run rm -f "$units/adisthanam.service" "$units/adisthanam-backup.service" "$units/adisthanam-backup.timer"
+  run systemctl daemon-reload
+  run tailscale serve --https=443 off || true
+  run rm -f /usr/local/bin/adisthanam
+  run rm -rf "$opt"
+  ok "Removed. Data kept in $state, backups in $store, secrets in $creds."
+  hint "Delete those only when you are sure: no one can get the synced data back without them."
+}
+
+cmd="${1:-}"
+[[ $# -gt 0 ]] && shift
+args=()
+while (($#)); do
+  case "$1" in
+    --target) target="${2:?--target needs a value}"; shift ;;
+    --node-name) node_name="${2:?--node-name needs a value}"; shift ;;
+    --import-legacy) legacy="${2:?--import-legacy needs a folder}"; shift ;;
+    --yes | -y) yes=true ;;
+    --dry-run) dry=true ;;
+    *) args+=("$1") ;;
+  esac
+  shift
+done
+
+case "$cmd" in
+  install) cmd_install ;;
+  status) cmd_status ;;
+  link) need_root link; show_link ;;
+  backup) cmd_backup ;;
+  verify) cmd_verify "${args[@]}" ;;
+  restore) cmd_restore "${args[@]}" ;;
+  rollback) cmd_rollback ;;
+  uninstall) cmd_uninstall ;;
+  -h | --help | help | "") sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "Unknown command $cmd (try --help)" ;;
+esac

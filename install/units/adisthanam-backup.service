@@ -1,0 +1,46 @@
+[Unit]
+Description=Back up Adisthanam
+Documentation=https://github.com/sudharamachandranrajeev/adisthanam
+
+[Service]
+Type=oneshot
+User=adisthanam
+Group=adisthanam
+# The server user makes a verified copy in its own outbox; then, with full
+# privileges (+), the copy moves to /var/backups/adisthanam, which the server
+# user can neither read nor change.
+ExecStart=/usr/bin/node /opt/adisthanam/current/src/db.ts backup
+ExecStartPost=+/opt/adisthanam/current/bin/collect-backups
+StateDirectory=adisthanam
+StateDirectoryMode=0700
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=512M
+
+PrivateNetwork=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM

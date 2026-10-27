@@ -1,0 +1,62 @@
+[Unit]
+Description=Adisthanam (Brahma sync server)
+Documentation=https://github.com/sudharamachandranrajeev/adisthanam
+Wants=network-online.target
+After=network-online.target tailscaled.service
+# A crash loop stops after 5 tries in 5 minutes instead of hiding forever;
+# `adisthanam status` reports it.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=adisthanam
+Group=adisthanam
+ExecStart=/usr/bin/node /opt/adisthanam/current/src/serve.ts
+Environment=ADISTHANAM_CONF=/etc/adisthanam/adisthanam.conf
+StateDirectory=adisthanam
+StateDirectoryMode=0700
+UMask=0077
+LoadCredentialEncrypted=token_key:/etc/credstore.encrypted/adisthanam.token_key
+LoadCredentialEncrypted=setup_code:/etc/credstore.encrypted/adisthanam.setup_code
+Restart=on-failure
+RestartSec=5
+
+# Resources: the server can never starve the computer it runs on.
+MemoryMax=512M
+TasksMax=64
+Nice=5
+
+# Sandbox. Read-only system, no home folders, no devices, no privileges.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+# V8's JIT needs writable+executable memory, so MemoryDenyWriteExecute stays
+# off. Outbound traffic (the CISA list and the signed Sentinel rules) is
+# limited in a later phase, through an allow-listing proxy.
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Runs as root after each backup (ExecStartPost=+ in adisthanam-backup.service).
+# Moves verified copies out of the server's reach and keeps the newest 14.
+set -euo pipefail
+
+state=/var/lib/adisthanam
+store=/var/backups/adisthanam
+keep="${ADISTHANAM_BACKUP_KEEP:-14}"
+
+umask 077
+install -d -m 0700 -o root -g root "$store"
+shopt -s nullglob
+moved=0
+for f in "$state"/outbox/brahma-*.db; do
+  [[ -L $f ]] && { echo "Refusing symlink $f" >&2; rm -f -- "$f"; continue; }
+  name="$(basename -- "$f")"
+  [[ $name =~ ^brahma-[0-9T-]+\.db$ ]] || { echo "Skipping unexpected file $name" >&2; continue; }
+  install -m 0600 -o root -g root -- "$f" "$store/$name"
+  rm -f -- "$f"
+  moved=$((moved + 1))
+done
+((moved)) || { echo "No new backup to collect" >&2; exit 1; }
+
+mapfile -t all < <(find "$store" -maxdepth 1 -name 'brahma-*.db' -printf '%f\n' | sort -r)
+for old in "${all[@]:$keep}"; do rm -f -- "$store/$old"; done
+
+# The server shows this in the apps' Settings; it may read it, not write it.
+date -u +%Y-%m-%dT%H:%M:%SZ >"$state/last-backup.new"
+chmod 0644 "$state/last-backup.new"
+mv -f "$state/last-backup.new" "$state/last-backup"
+echo "Collected $moved backup(s) into $store (keeping $keep)"

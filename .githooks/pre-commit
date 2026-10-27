@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Nothing personal or secret may be committed (scripts/check-public.sh).
+exec scripts/check-public.sh
