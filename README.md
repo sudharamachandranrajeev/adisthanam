@@ -85,8 +85,11 @@ locks (encrypts) the data before sending it, so the server holds everything and 
 
 ### Home server
 
-On a Linux computer that stays on (an old laptop is fine), with Git, Node.js 24 or newer and
-[Tailscale](https://tailscale.com/download):
+On a Linux computer with systemd that stays on (an old laptop is fine), you'll need Git,
+[Tailscale](https://tailscale.com/download) signed in, an active `ufw` firewall, and Node.js 24 or
+newer installed by the system package manager (on Arch: `sudo pacman -S nodejs-lts-krypton`). A
+Node.js in your home folder is refused on purpose: the server must not run code that can be changed
+without `sudo`.
 
 ```bash
 # Clone this repository
@@ -96,47 +99,61 @@ $ git clone https://github.com/sudharamachandranrajeev/adisthanam
 $ cd adisthanam
 
 # Install, start and print the setup link
-$ ./adisthanam install --target home
+$ sudo ./adisthanam install --target home --node-name home-server
 ```
 
-It asks once for your password (`sudo`) for the firewall rule and for starting with the computer,
-and shows each command before running it. Then, in any Brahma app, choose **Sync across my devices
-→ I have a server**, scan the QR code or paste the link, and create your account.
+Every command that changes the system is printed before it runs; add `--dry-run` to only print
+them. The installer:
+
+- builds the release from `git archive` of the checked-out commit and the Brahma server commit
+  pinned in `brahma.lock`, into root-owned `/opt/adisthanam/releases/`;
+- runs the server as its own `adisthanam` user in a systemd sandbox, data in `/var/lib/adisthanam`;
+- seals the signing key and the setup code with `systemd-creds` (to the TPM when there is one);
+- keeps the server on `127.0.0.1` and publishes it as HTTPS with `tailscale serve`;
+- lets in only Tailscale on port 443 (and 22 for SSH, which becomes keys-only);
+- keeps the computer running with the lid closed, and backs up every day.
+
+`--node-name` renames this computer in Tailscale first. Pick a neutral name: it appears in public
+certificate logs once HTTPS is used. Moving from the Brahma home server? Add
+`--import-legacy ~/.local/share/brahma-server` to bring its accounts and signing key along, so
+every device stays signed in.
+
+Then, in any Brahma app, choose **Sync across my devices → I have a server**, scan the QR code or
+paste the link, and create your account.
 
 Good to know:
 
-- Keep the computer plugged in, and set it never to sleep, also with the lid closed.
-- Install Tailscale on every phone and computer that should sync.
+- Keep the computer plugged in.
+- Install Tailscale on every phone and computer that should sync, and limit who reaches the server
+  in the Tailscale admin console (the installer lists what to set).
 
 ### Rented server, Docker or Cloudflare
 
-```bash
-$ ./adisthanam install --target vps          # Caddy in front, automatic HTTPS
-$ ./adisthanam install --target docker       # prints a compose file to start
-$ ./adisthanam install --target cloudflare   # Worker + D1 on Cloudflare's free plan
-```
+Coming in a later release: `--target vps` (Caddy in front, automatic HTTPS), `--target docker` and
+`--target cloudflare` (Worker + D1 on Cloudflare's free plan).
 
 ### Looking after it
 
 | Command | What it does |
 | --- | --- |
-| `adisthanam status` | Running? Version, accounts, devices, last backup, database check |
-| `adisthanam doctor` | Everything `status` checks, plus the fix for each problem found |
-| `adisthanam link` | The setup link and QR code again |
-| `adisthanam backup` | Back up now (a daily backup runs by itself) |
-| `adisthanam restore FILE` | Put a backup back (the current data is saved first) |
-| `adisthanam update` | Install the newest signed release; rolls back if it fails |
-| `adisthanam rollback` | Go back to the previous release |
-| `adisthanam export` / `import FILE` | Move the server to another computer or target |
-| `adisthanam uninstall` | Remove the server (asks before deleting data) |
+| `sudo adisthanam status` | Running? Release, accounts, devices, database check, last and next backup |
+| `sudo adisthanam link` | The setup link and QR code again (until the owner account exists) |
+| `sudo adisthanam backup` | Back up now (a daily backup runs by itself; the newest 14 are kept) |
+| `adisthanam verify FILE` | Check a backup without changing it |
+| `sudo adisthanam restore FILE` | Put a backup back (the current data is saved first) |
+| `sudo adisthanam rollback` | Go back to the previous release |
+| `sudo adisthanam uninstall` | Remove the server (data, backups and secrets are kept) |
+
+Coming next: `doctor`, signed `update`, `export` / `import`, and encrypted copies to a USB disk and
+off-site.
 
 <details>
 <summary><b>Develop</b></summary>
 
 ```bash
-$ npm ci
-$ npm test          # unit tests and the acceptance suite against a throwaway install
-$ npm run check     # type check, secret scan and the personal-information scan
+$ npm test          # fetches the pinned Brahma server, then runs the server as a real process
+$ npm run check     # secret scan (gitleaks) and the personal-information scan
+$ git config core.hooksPath .githooks   # run both before every commit and push
 ```
 
 Every commit is scanned for secrets and for anything that identifies a person, home or machine.

@@ -50,11 +50,14 @@ ask() {
   [[ $reply =~ ^[Yy] ]]
 }
 need_root() { $dry || [[ $(id -u) -eq 0 ]] || die "Run this with sudo: sudo $0 $*"; }
-port() { sed -n 's/^PORT=//p' "$conf" 2>/dev/null || true; }
+port() {
+  local p
+  p="$(sed -n 's/^PORT=//p' "$conf" 2>/dev/null || true)"
+  echo "${p:-8090}"
+}
 healthy() {
   local p
   p="$(port)"
-  p="${p:-8090}"
   curl -fsS -m 2 -H "Host: 127.0.0.1:$p" "http://127.0.0.1:$p/api/health"
 }
 wait_healthy() {
@@ -183,6 +186,7 @@ ensure_secret() {
     ok "Secret $name already sealed"
     return
   fi
+  $dry || ((${#value} >= 12)) || die "Could not make the $name secret; nothing was sealed."
   run install -d -m 0700 "$creds"
   printf '  %s+%s systemd-creds encrypt --with-key=%s --name=%s - %s\n' "$yellow" "$off" "$cred_key" "$name" "$file"
   $dry || printf '%s' "$value" | systemd-creds encrypt --with-key="$cred_key" --name="$name" - "$file"
@@ -195,8 +199,10 @@ ensure_secrets() {
   key="$(legacy_value TOKEN_KEY)"
   code="$(legacy_value SETUP_CODE)"
   [[ -n $key ]] && hint "Keeping the signing key from $legacy, so signed-in devices stay signed in"
-  ensure_secret token_key "${key:-$(random_secret)}"
-  ensure_secret setup_code "${code:-$(setup_code)}"
+  [[ -n $key ]] || key="$(random_secret)"
+  [[ -n $code ]] || $dry || code="$(setup_code)"
+  ensure_secret token_key "$key"
+  ensure_secret setup_code "$code"
 }
 
 # --- Data -----------------------------------------------------------------
@@ -244,17 +250,17 @@ install_units() {
 
 publish() {
   step "HTTPS through Tailscale"
-  run tailscale serve --bg --https=443 "http://127.0.0.1:$(port || echo 8090)"
+  run tailscale serve --bg --https=443 "http://127.0.0.1:$(port)"
   ok "Published at https://$(tailnet_name)"
 }
 
 firewall() {
   step "Firewall"
-  if ! command -v ufw >/dev/null || ! ufw status | grep -q '^Status: active'; then
+  if ! $dry && { ! command -v ufw >/dev/null || ! ufw status | grep -q '^Status: active'; }; then
     die "No active ufw firewall. Enable one (sudo ufw enable) and run install again."
   fi
   local p
-  p="$(port || echo 8090)"
+  p="$(port)"
   # Rules the old server or its installer may have added.
   for src in "in on tailscale0" "from 10.0.0.0/8" "from 172.16.0.0/12" "from 192.168.0.0/16"; do
     # shellcheck disable=SC2086
@@ -271,9 +277,9 @@ firewall() {
 harden_ssh() {
   systemctl is-active --quiet sshd || return 0
   step "SSH: keys only"
-  local owner="${SUDO_USER:-}" keys
-  keys="$(getent passwd "$owner" | cut -d: -f6)/.ssh/authorized_keys"
-  if [[ -z $owner || ! -s $keys ]]; then
+  local owner="${SUDO_USER:-}" keys=""
+  [[ -n $owner ]] && keys="$(getent passwd "$owner" | cut -d: -f6)/.ssh/authorized_keys"
+  if [[ -z $keys || ! -s $keys ]]; then
     hint "No authorized_keys for ${owner:-the admin user}; leaving SSH settings unchanged so you are not locked out."
     return
   fi
@@ -282,7 +288,11 @@ harden_ssh() {
     "PasswordAuthentication no" "KbdInteractiveAuthentication no" "PermitRootLogin no" \
     "AuthenticationMethods publickey" >"$file"
   printf '  %s+%s write %s\n' "$yellow" "$off" "$file"
-  run sshd -t
+  # A config sshd rejects must never stay behind for the next restart.
+  if ! $dry && ! sshd -t; then
+    rm -f "$file"
+    die "sshd rejected the new settings; they were removed and SSH is unchanged."
+  fi
   run systemctl reload sshd
   ok "SSH accepts keys only (from Tailscale only, by the firewall)"
 }
