@@ -328,7 +328,11 @@ show_link() {
     return
   fi
   [[ -t 1 ]] || die "The setup link holds the one-time owner code; it is only printed to a terminal."
-  code="$(systemd-creds decrypt "$creds/adisthanam.setup_code" -)"
+  # Sealed as "setup_code" (the name the service loads it under), so the
+  # name must be given; by default systemd expects it to match the filename.
+  code="$(systemd-creds decrypt --name=setup_code "$creds/adisthanam.setup_code" -)" ||
+    die "Could not unseal the setup code."
+  [[ -n $code ]] || die "The setup code is empty."
   local link="brahma://setup?s=https%3A%2F%2F$host&i=$code"
   say ""
   say "  ${bold}Setup link${off} (paste it in any Brahma app, or scan the code):"
