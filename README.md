@@ -1,194 +1,265 @@
 <h1 align="center">
   <br>
-  <a href="https://github.com/sudharamachandranrajeev/adisthanam"><img src="branding/adisthanam-512.png" alt="Adisthanam" width="140"></a>
+  <a href="https://github.com/sudharamachandranrajeev/adisthanam"><img src="branding/adisthanam.svg" alt="Adisthanam" width="140"></a>
   <br>
   Adisthanam
   <br>
 </h1>
 
-<h4 align="center">The foundation under every Brahma app: your own login and encrypted data server, installed with one command at home, on a rented server, in Docker or on Cloudflare.</h4>
+<h4 align="center">Your own private server for every Brahma app: one sign-in, all your data, set up on a home computer with one command.</h4>
 
 <p align="center">
-  <a href="https://github.com/sudharamachandranrajeev/adisthanam/releases"><img src="https://img.shields.io/github/v/release/sudharamachandranrajeev/adisthanam?include_prereleases&color=b8860b" alt="Release"></a>
-  <img src="https://img.shields.io/badge/targets-home%20%7C%20VPS%20%7C%20Docker%20%7C%20Cloudflare-555" alt="Targets">
-  <img src="https://img.shields.io/badge/Node.js-24%2B-5fa04e?logo=nodedotjs" alt="Node.js 24+">
-  <img src="https://img.shields.io/badge/data-end--to--end%20encrypted-2b2a6b" alt="End-to-end encrypted">
-  <img src="https://img.shields.io/badge/part%20of-Brahma-8a5cf6" alt="Part of Brahma">
+  <a href="https://github.com/sudharamachandranrajeev/adisthanam/releases"><img src="https://img.shields.io/github/v/release/sudharamachandranrajeev/adisthanam?include_prereleases&color=b8860b&label=release" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/runs%20on-Linux%20with%20systemd-555" alt="Runs on Linux with systemd">
+  <img src="https://img.shields.io/badge/your%20data-end--to--end%20encrypted-2b2a6b" alt="Your data is end-to-end encrypted">
+  <a href="https://github.com/sudharamachandranrajeev/brahma"><img src="https://img.shields.io/badge/part%20of-Brahma-8a5cf6" alt="Part of Brahma"></a>
 </p>
 
 <p align="center">
-  <a href="#key-features">Key Features</a> •
-  <a href="#how-to-use">How To Use</a> •
-  <a href="#download">Download</a> •
-  <a href="#credits">Credits</a> •
-  <a href="#related">Related</a> •
-  <a href="#license">License</a>
+  <a href="#-what-it-does">What it does</a> •
+  <a href="#-install">Install</a> •
+  <a href="#-how-it-works">How it works</a> •
+  <a href="#-faq-and-troubleshooting">FAQ</a> •
+  <a href="#%EF%B8%8F-for-developers">For developers</a>
 </p>
 
-> **Status: in development.** Nothing is released yet. The features below are the target for the
-> first release, which ships only once every one of them passes the acceptance tests on a real home
-> server.
+Adisthanam (अधिष्ठानम्, "foundation") turns a computer you own into the sync server for the
+Brahma apps: Brahma, Artha, Vidya, Udyoga and the rest. Every device locks (encrypts) its data
+before sending it, so the server keeps everything and can read none of it. Status: **in
+development**, version 0.1.0, no release yet. Only the home-computer setup works today.
 
-Adisthanam (अधिष्ठानम्, "foundation") installs, protects, watches, backs up and moves the
-[Brahma sync server](https://github.com/sudharamachandranrajeev/brahma/tree/main/server). Every
-Brahma app — Brahma, Artha, Vidya, Udyoga, Graha Anveshana, Vahana Anveshana, Bhojana, Vani, Bahya
-Nireekshana and the apps that join later — signs in to it and keeps its data there. Each device
-locks (encrypts) the data before sending it, so the server holds everything and can read none of it.
+## ✨ What it does
 
-## Key Features
-
-* **One command, anywhere** – the same `adisthanam install` sets up a computer at home, a rented
-  Linux server, a Docker host or Cloudflare. Running it again repairs; it never half-installs.
-* **One login for every app** – one account signs in to every Brahma app. Sign-up needs the owner's
-  one-time setup code or a single-use invite. Passwords never reach the server.
-* **Every app's data in one place** – all data entered in any Brahma app is stored on your server,
-  end-to-end encrypted on the device first. The server sees e-mail addresses, device ids and sync
-  times, nothing else.
-* **Private by default** – at home it is reachable only through Tailscale, over HTTPS, with the
-  server itself listening on this computer only. Nothing is opened to the internet unless you choose
-  a public target, and then only over TLS.
-* **Locked-down service** – runs as its own unprivileged user in a systemd sandbox: read-only system,
-  no access to your home folder, no special rights, limited memory and CPU, so it can never slow down
-  or harm the computer it runs on.
-* **Devices you can see and remove** – every signed-in device is listed with when it last synced.
-  Sign one out, or sign out everywhere. A new device signing in sends you an alert.
-* **Backups that work** – a daily backup, encrypted, checked by opening it again, with the newest 14
-  kept. Optionally a second copy goes off the computer to storage that cannot be overwritten or
-  deleted from here, so ransomware cannot reach it.
-* **Health watch** – checks itself every minute, restarts after a crash, stops a crash loop instead
-  of hiding it, and warns before the disk fills or the clock drifts.
-* **Network watch** – the server may only talk to the few addresses it needs. Anything else, a new
-  listening port, or a burst of failed sign-ins raises an alert on your phone (ntfy).
-* **Sentinel on the server** – server-side security events show up in Sentinel in every Brahma app,
-  next to each device's own checks, with what to do about them.
-* **Safe updates** – releases are signed; an update takes a backup first, checks the new version,
-  and rolls back by itself if it fails.
-* **Move it any time** – `export` on the old server and `import` on the new one moves every account
-  and device, home to cloud or back, without anyone signing in again.
-* **Plain-words doctor** – `adisthanam doctor` checks the firewall, Tailscale, backups, disk, clock
-  and certificates, and says how to fix what it finds.
+- 🏠 **One command at home** – `adisthanam install` sets up an old laptop or desktop as your
+  server. Running it again checks each step and repairs what is missing.
+- 🔑 **One sign-in for every app** – one account works in every Brahma app. Only you can create
+  the first account, with a one-time setup link.
+- 🙈 **Private by default** – the server is reachable only through Tailscale (a free private
+  network between your own devices), over HTTPS. Nothing is opened to the internet.
+- 🧱 **Fenced in** – it runs as its own user in a locked-down service (a systemd sandbox), with
+  no access to your files and capped memory, so it cannot slow down or harm the computer.
+- 💾 **Daily backups** – a copy every day, checked by opening it again, moved where the server
+  itself cannot change it. The newest 14 are kept.
+- ↩️ **Easy to undo** – restore a backup, go back to the previous version, or uninstall. A
+  restore saves the current data first, and uninstall keeps it.
+- 🔄 **Syncthing to plan** (optional) – keeps file sync between your own computers private and the
+  same on each one, and refuses changes that could lose files.
+- 🚚 **Moves from the old Brahma home server** – brings its accounts along, so every device stays
+  signed in.
 
 <details>
-<summary><b>What the server can and cannot see</b></summary>
+<summary><b>Coming in later releases</b></summary>
 
-- **Can see:** account e-mail addresses, device ids and names, when each device synced, the size of
-  what was synced.
-- **Cannot see:** anything you type into an app. Rows are encrypted on the device with
-  XChaCha20-Poly1305 under keys derived from your password (Argon2id, HKDF). The server stores a keyed
-  hash of a secret derived from the password, never the password.
-- **Your recovery key** is the only way back in without your password. Write it down when the app
-  shows it; the server cannot recover your data for you.
+| Planned | What it adds |
+| --- | --- |
+| Rented server, Docker, Cloudflare | `--target vps`, `docker` and `cloudflare`, for a server away from home |
+| `adisthanam doctor` | Checks the firewall, Tailscale, backups, disk, clock and certificates, in plain words |
+| Signed `update` | Backs up, installs a signed release, and rolls back by itself if it fails |
+| `export` / `import` | Moves every account to a new server, with no one signing in again |
+| Encrypted off-site copies | Backups to a USB disk or storage that cannot be overwritten from here |
+| Health and network watch | Alerts on your phone for crashes, a full disk, new open ports or many failed sign-ins |
 
 </details>
 
-## How To Use
+## 🚀 Install
 
-### Home server
+### Step 1 – Check what you need
 
-On a Linux computer with systemd that stays on (an old laptop is fine), you'll need Git,
-[Tailscale](https://tailscale.com/download) signed in, an active `ufw` firewall, and Node.js 24 or
-newer installed by the system package manager (on Arch: `sudo pacman -S nodejs-lts-krypton`). A
-Node.js in your home folder is refused on purpose: the server must not run code that can be changed
-without `sudo`.
+A Linux computer that stays on and plugged in. An old laptop is fine. It needs:
 
-```bash
-# Clone this repository
-$ git clone https://github.com/sudharamachandranrajeev/adisthanam
+| You need | Why | How to check |
+| --- | --- | --- |
+| systemd 250 or newer | runs the server and seals its secrets | `systemctl --version` |
+| Node.js 24 or newer at `/usr/bin/node` | runs the server | `/usr/bin/node --version` |
+| Tailscale 1.102.3 or newer, signed in | private access and HTTPS | `tailscale status` |
+| An active `ufw` firewall | only Tailscale may reach the server | `sudo ufw status` |
+| Git and curl | fetch and check the server | `git --version` |
 
-# Go into it
-$ cd adisthanam
+Install Node.js with your system's package manager (on Arch: `sudo pacman -S nodejs-lts-krypton`).
+A Node.js in your home folder is refused on purpose: the server must not run code that can be
+changed without `sudo`. Install [Tailscale](https://tailscale.com/download) on the server and on
+every phone and computer that should sync.
 
-# Install, start and print the setup link
-$ sudo ./adisthanam install --target home --node-name home-server
-```
+### Step 2 – Install
 
-Every command that changes the system is printed before it runs; add `--dry-run` to only print
-them. The installer:
+1. Open a terminal on the server computer and get Adisthanam:
+   ```sh
+   git clone https://github.com/sudharamachandranrajeev/adisthanam
+   cd adisthanam
+   ```
+2. Optional: see every step without changing anything:
+   ```sh
+   sudo ./adisthanam install --target home --dry-run
+   ```
+3. Install. `--node-name` gives this computer a neutral Tailscale name. Pick one that says nothing
+   about you: it appears in public certificate logs once HTTPS is on.
+   ```sh
+   sudo ./adisthanam install --target home --node-name home-server
+   ```
+4. Wait for **Connect your apps**. It prints a **setup link** starting with `brahma://setup`, and a
+   QR code if `qrencode` is installed.
 
-- builds the release from `git archive` of the checked-out commit and the Brahma server commit
-  pinned in `brahma.lock`, into root-owned `/opt/adisthanam/releases/`;
-- runs the server as its own `adisthanam` user in a systemd sandbox, data in `/var/lib/adisthanam`;
-- seals the signing key and the setup code with `systemd-creds` (to the TPM when there is one);
-- keeps the server on `127.0.0.1` and publishes it as HTTPS with `tailscale serve`;
-- lets in only Tailscale on port 443 (and 22 for SSH, which becomes keys-only);
-- keeps the computer running with the lid closed, and backs up every day.
+Every command that changes the system is printed before it runs.
 
-`--node-name` renames this computer in Tailscale first. Pick a neutral name: it appears in public
-certificate logs once HTTPS is used. Moving from the Brahma home server? Add
-`--import-legacy ~/.local/share/brahma-server` to bring its accounts and signing key along, so
-every device stays signed in.
+> [!NOTE]
+> Moving from the older Brahma home server? Add `--import-legacy ~/.local/share/brahma-server`
+> to step 3. It copies the accounts and the signing key, so every device stays signed in. The old
+> copy stays where it was until you delete it.
 
-Then, in any Brahma app, choose **Sync across my devices → I have a server**, scan the QR code or
-paste the link, and create your account.
+### Step 3 – Connect your apps
 
-Good to know:
+1. In any Brahma app, choose **Sync across my devices → I already have a server**.
+2. Paste the setup link, or scan the QR code with your phone's camera.
+3. Choose **Create account**. This makes you the owner. The link stops working after that.
+4. **Write down the recovery key** the app shows, and keep it away from the device.
+5. To add family later: **Settings → Sync → Invite someone**. Each person gets a private account.
 
-- Keep the computer plugged in.
-- Install Tailscale on every phone and computer that should sync, and limit who reaches the server
-  in the Tailscale admin console (the installer lists what to set).
+Lost the link before creating the account? Run `sudo adisthanam link` to see it again.
 
-### Rented server, Docker or Cloudflare
+### Step 4 – Finish by hand
 
-Coming in a later release: `--target vps` (Caddy in front, automatic HTTPS), `--target docker` and
-`--target cloudflare` (Worker + D1 on Cloudflare's free plan).
+The installer ends with a short **Still to do by hand** list. Do it once: in the Tailscale admin
+console, let only your family reach this server and turn on device approval. Keep exit node,
+subnet routes and Funnel off on this computer.
 
-### Looking after it
+## 🧰 Looking after it
 
 | Command | What it does |
 | --- | --- |
-| `sudo adisthanam status` | Running? Release, accounts, devices, database check, last and next backup |
-| `sudo adisthanam link` | The setup link and QR code again (until the owner account exists) |
-| `sudo adisthanam backup` | Back up now (a daily backup runs by itself; the newest 14 are kept) |
-| `adisthanam verify FILE` | Check a backup without changing it |
-| `sudo adisthanam restore FILE` | Put a backup back (the current data is saved first) |
-| `sudo adisthanam rollback` | Go back to the previous release |
-| `sudo adisthanam uninstall` | Remove the server (data, backups and secrets are kept) |
+| `sudo adisthanam status` | Running? Version, accounts, devices, database check, last and next backup |
+| `sudo adisthanam link` | Shows the setup link again (until the owner account exists) |
+| `sudo adisthanam backup` | Backs up now (a daily backup also runs by itself) |
+| `adisthanam verify FILE` | Checks a backup without changing it |
+| `sudo adisthanam restore FILE` | Puts a backup back (the current data is saved first) |
+| `sudo adisthanam rollback` | Goes back to the previous version |
+| `sudo adisthanam uninstall` | Removes the server, but keeps data, backups and secrets |
+| `adisthanam sync status` | Checks this computer's Syncthing against your plan (no `sudo`) |
 
-Coming next: `doctor`, signed `update`, `export` / `import`, and encrypted copies to a USB disk and
-off-site.
+Backups are in `/var/backups/adisthanam`. To keep file sync between your own computers private
+with Syncthing, see [Syncthing between your own computers](docs/sync.md).
 
-<details>
-<summary><b>Develop</b></summary>
+## 🧭 How it works
 
-```bash
-$ npm test          # fetches the pinned Brahma server, then runs the server as a real process
-$ npm run check     # secret scan (gitleaks) and the personal-information scan
-$ git config core.hooksPath .githooks   # run both before every commit and push
+```mermaid
+flowchart LR
+    P["📱 Your phone"] -->|"locked before it leaves"| T["🔒 Tailscale<br/>your private network"]
+    L["💻 Your computer"] -->|"locked before it leaves"| T
+    T -->|"HTTPS"| S["🏠 Adisthanam<br/>on your home computer"]
+    S --> D[("Locked data")]
+    D -->|"every day"| B[("💾 Checked backups")]
 ```
 
-Every commit is scanned for secrets and for anything that identifies a person, home or machine.
-Examples use documentation addresses only (`192.0.2.0/24`, `2001:db8::/32`, `example.com`).
+- **Each device** encrypts its changes before sending them. Only your devices hold the key.
+- **Tailscale** carries them to the server over HTTPS. The firewall lets in nothing else, apart
+  from SSH over Tailscale.
+- **The server** listens on this computer only, stores the locked data, and passes it on to your
+  other devices.
+- **Each day** a backup is made, opened again to check it, and moved out of the server's reach.
+
+## 🔒 Your data
+
+- **The server can see** account e-mail addresses, device names and ids, when each device
+  synced, and how much it sent.
+- **It cannot see** anything you type into an app. Rows are encrypted on the device with keys
+  made from your password. The password itself never reaches the server.
+- **Where it lives**: data in `/var/lib/adisthanam`, backups in `/var/backups/adisthanam`, and
+  the two secrets sealed with `systemd-creds` (to the TPM chip when the computer has one).
+- **What the server downloads**: CISA's public list of known security flaws, at most twice a day,
+  for the apps' Sentinel security checks. Nothing about you is sent.
+- **Backups** hold the same locked rows, plus the account list. Copy them to a USB disk yourself
+  until off-site copies arrive.
+
+> [!IMPORTANT]
+> Your password and recovery key are the only ways to unlock your data. If you lose both, nobody
+> can recover it, not even the server owner. `uninstall` keeps the data and secrets; delete them
+> only when you are sure.
+
+## ❓ FAQ and troubleshooting
+
+<details>
+<summary><b>Do I need to leave the computer on?</b></summary>
+
+Yes, and plugged in. The installer stops the computer from sleeping and keeps it running with the
+lid closed. The lid setting takes effect after the next restart.
+</details>
+
+<details>
+<summary><b>"No Node.js at /usr/bin/node", or a Node.js in my home folder is refused</b></summary>
+
+Install Node.js 24 or newer with your system's package manager, so it lands in `/usr/bin`. This
+is on purpose: code in your home folder could be changed without `sudo`.
+</details>
+
+<details>
+<summary><b>"Tailscale is not signed in" or "No active ufw firewall"</b></summary>
+
+Run `sudo tailscale up` and sign in, or install `ufw` and run `sudo ufw enable`. Then run the
+install command again; it carries on from there.
+</details>
+
+<details>
+<summary><b>Will it lock me out of SSH?</b></summary>
+
+No. SSH becomes keys-only, and only over Tailscale, but only when you already have an SSH key set
+up. Without one, SSH is left as it was. A setting `sshd` rejects is removed straight away.
+</details>
+
+<details>
+<summary><b>The server does not start</b></summary>
+
+Run `sudo adisthanam status`, then `journalctl -u adisthanam -n 50` for the reason. After 5
+crashes in 5 minutes it stops trying, so a fault cannot hide.
+</details>
+
+## 🛠️ For developers
+
+<details>
+<summary>Test, scan and change the pinned server</summary>
+
+You need Node.js 24 or newer, and [gitleaks](https://github.com/gitleaks/gitleaks) for the scan.
+
+```sh
+npm test                               # fetches the pinned Brahma server, then tests it as a real process
+npm run check                          # secret scan (gitleaks) and the personal-information scan
+git config core.hooksPath .githooks    # run the scan before every commit and push
+```
+
+- The Brahma server commit Adisthanam runs is pinned in `brahma.lock`. To upgrade, change the
+  commit, run `npm test`, and read the server's changelog first.
+- Every commit is scanned for secrets and for anything that points at a person, home or machine.
+  Examples use documentation addresses only (`192.0.2.0/24`, `2001:db8::/32`, `example.com`).
+- Service files are in `install/units/`; the command itself is the `adisthanam` script.
 
 </details>
 
-## Download
+<details>
+<summary>Credits</summary>
 
-Releases will be on the [releases page](https://github.com/sudharamachandranrajeev/adisthanam/releases)
-(0.x versions are pre-releases). Each release has `SHA256SUMS.txt` and a signature; `adisthanam
-update` checks both and refuses a file that does not match.
-
-## Credits
-
-This software uses the following open source packages and services:
-
+- [Brahma sync server](https://github.com/sudharamachandranrajeev/brahma/tree/main/server), the
+  protocol Adisthanam runs
 - [Node.js](https://nodejs.org) and its built-in `node:sqlite`
-- [Tailscale](https://tailscale.com) for private access and HTTPS at home
-- [Caddy](https://caddyserver.com) for HTTPS on rented servers
-- [Cloudflare Workers](https://workers.cloudflare.com) and D1 for the cloud target
-- [age](https://age-encryption.org) for encrypted backups
-- [ntfy](https://ntfy.sh) for alerts
+- [Tailscale](https://tailscale.com) for private access and HTTPS
+- [systemd](https://systemd.io) for the sandbox, timers and sealed secrets
+- [ufw](https://launchpad.net/ufw) for the firewall
+- [Syncthing](https://syncthing.net) for file sync between your computers
+- [gitleaks](https://github.com/gitleaks/gitleaks) for the secret scan
+
+</details>
 
 ## Related
 
-* [Brahma](https://github.com/sudharamachandranrajeev/brahma) – the suite app, its shared core and
-  the sync server Adisthanam runs
-* [Artha](https://github.com/sudharamachandranrajeev/artha) – finance, accounting and investments
-* [Vidya](https://github.com/sudharamachandranrajeev/vidya) – learning and knowledge
-* [Udyoga](https://github.com/sudharamachandranrajeev/udyoga) – career and job search
-* [Graha Anveshana](https://github.com/sudharamachandranrajeev/graha-anveshana) – property
-* [Vahana Anveshana](https://github.com/sudharamachandranrajeev/vahana-anveshana) – cars
-* [Bhojana](https://github.com/sudharamachandranrajeev/bhojana) – groceries and shopping
-* [Bahya Nireekshana](https://github.com/sudharamachandranrajeev/bahya-nireekshana) – network monitoring
+Adisthanam is the server for the **Brahma** family. Every app below signs in to it.
+
+| App | What it does |
+| --- | --- |
+| [brahma](https://github.com/sudharamachandranrajeev/brahma) | The shared core, the all-in-one app and the sync server |
+| [artha](https://github.com/sudharamachandranrajeev/artha) | Money, accounts and investments |
+| [vidya](https://github.com/sudharamachandranrajeev/vidya) | Learning, flashcards and focus |
+| [udyoga](https://github.com/sudharamachandranrajeev/udyoga) | Career and job hunting |
+| [graha-anveshana](https://github.com/sudharamachandranrajeev/graha-anveshana) | Find a home to rent or buy |
+| [vahana-anveshana](https://github.com/sudharamachandranrajeev/vahana-anveshana) | Find a car |
+| [bhojana](https://github.com/sudharamachandranrajeev/bhojana) | Groceries and shopping |
+| [bahya-nireekshana](https://github.com/sudharamachandranrajeev/bahya-nireekshana) | Network monitoring |
 
 ## License
 
