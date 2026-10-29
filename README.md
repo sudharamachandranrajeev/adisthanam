@@ -164,7 +164,7 @@ flowchart LR
   made from your password. The password itself never reaches the server.
 - **Where it lives**: data in `/var/lib/adisthanam`, backups in `/var/backups/adisthanam`, and
   the two secrets sealed with `systemd-creds` (to the TPM chip when the computer has one).
-- **What the server downloads**: CISA's public list of known security flaws, at most twice a day,
+- **What the server downloads**: a public government list of known security flaws, at most twice a day,
   for the apps' Sentinel security checks. Nothing about you is sent.
 - **Backups** hold the same locked rows, plus the account list. Copy them to a USB disk yourself
   until off-site copies arrive.
